@@ -139,7 +139,7 @@
   <div id="screen-loading" class="screen active">
     <div style="margin:auto; text-align:center;">
       <div class="spinner"></div>
-      <div style="color:var(--muted); font-size:15px;">連線中...</div>
+      <div style="color:var(--muted); font-size:15px;">連線中，第一次啟動可能需要 20~30 秒...</div>
     </div>
   </div>
 
@@ -240,10 +240,18 @@ function showScreen(id) {
   document.getElementById(id).classList.add('active');
 }
 
+function friendlyError_(err) {
+  const msg = String(err && err.message || err);
+  if (msg.includes('fetch') || msg.includes('abort')) {
+    return '網路訊號不穩或連線逾時，請確認網路後再試一次';
+  }
+  return msg;
+}
+
 async function callApi(action, payload, retrying) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒逾時
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒逾時：GAS首次冷啟動偶爾會超過20秒
     const res = await fetch(GAS_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -286,7 +294,7 @@ async function init() {
     showScreen('screen-dept');
   } catch (err) {
     document.getElementById('error-title').textContent = '連線發生問題';
-    document.getElementById('error-detail').textContent = String(err && err.message || err);
+    document.getElementById('error-detail').textContent = friendlyError_(err);
     showScreen('screen-error');
   }
 }
@@ -312,11 +320,7 @@ async function startScan() {
     hideToast();
   } catch (err) {
     hideToast();
-    const msg = String(err && err.message || err);
-    const friendly = msg.includes('fetch') || msg.includes('abort')
-      ? '網路訊號不穩，請確認網路後再試一次'
-      : msg;
-    alert('掃描失敗：' + friendly);
+    alert('掃描失敗：' + friendlyError_(err));
   }
 }
 
