@@ -294,10 +294,30 @@ async function startScan() {
     const res = await liff.scanCodeV2();
     const code = (res.value || '').trim();
     if (!code) return;
+    showToast('查詢中...');
     await lookupAndAddItem(code);
+    hideToast();
   } catch (err) {
+    hideToast();
     alert('掃描失敗，請再試一次：' + (err && err.message || err));
   }
+}
+
+let toastTimer = null;
+function showToast(text) {
+  let el = document.getElementById('scan-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'scan-toast';
+    el.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:white;padding:10px 20px;border-radius:20px;font-size:15px;z-index:999;';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.display = 'block';
+}
+function hideToast() {
+  const el = document.getElementById('scan-toast');
+  if (el) el.style.display = 'none';
 }
 
 async function lookupAndAddItem(code) {
