@@ -223,8 +223,8 @@
 // ============================================================
 // 設定區：以下三個常數，上線前務必換成實際的值
 // ============================================================
-const LIFF_ID = '2010616417-pG4yv5V0';                 // LINE Developers 建立LIFF App後取得
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwImI2HJ4B4mr-XoOXL49U2xpV9XtypuEyOzM7WzuzXF4ZhSmynOYup3p9whKb_MhV1QA/exec'; // GAS 部署後的網址
+const LIFF_ID = '2010616417-pG4yv5V0';               // ✅ 已設定
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwImI2HJ4B4mr-XoOXL49U2xpV9XtypuEyOzM7WzuzXF4ZhSmynOYup3p9whKb_MhV1QA/exec'; // ✅ 已設定
 // ============================================================
 
 let state = {
@@ -261,7 +261,7 @@ async function init() {
     const profile = await liff.getProfile();
     state.lineUserId = profile.userId;
 
-    const auth = await callApi('checkAuth', { lineUserId: state.lineUserId });
+    const auth = await callApi('checkAuth', { lineUserId: state.lineUserId, displayName: profile.displayName });
     if (!auth.ok) {
       document.getElementById('error-title').textContent = '尚未開通使用權限';
       document.getElementById('error-detail').textContent = '請聯繫管理人員將您的LINE帳號加入領料掃碼名單';
