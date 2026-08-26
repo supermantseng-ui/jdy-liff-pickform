@@ -312,7 +312,12 @@ function goToDeptScreen() {
 
 async function startScan() {
   try {
-    const res = await liff.scanCodeV2();
+    // scanCodeV2() 是LINE原生相機模組，理論上不會不回應，但保險起見包一層逾時，
+    // 避免萬一真的卡住時，App整個看起來像當機、使用者不知道能不能重試
+    const scanTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('scan-timeout')), 25000)
+    );
+    const res = await Promise.race([liff.scanCodeV2(), scanTimeout]);
     const code = (res.value || '').trim();
     if (!code) return;
     showToast('查詢中...');
@@ -320,6 +325,10 @@ async function startScan() {
     hideToast();
   } catch (err) {
     hideToast();
+    if (err && err.message === 'scan-timeout') {
+      alert('相機沒有反應，請直接再按一次「掃描料號」重試');
+      return;
+    }
     alert('掃描失敗：' + friendlyError_(err));
   }
 }
@@ -330,7 +339,7 @@ function showToast(text) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'scan-toast';
-    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:white;padding:16px 28px;border-radius:14px;font-size:17px;font-weight:700;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,0.3);';
+    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:white;padding:16px 28px;border-radius:14px;font-size:17px;font-weight:700;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,0.3);pointer-events:none;';
     document.body.appendChild(el);
   }
   el.textContent = text;
