@@ -240,13 +240,26 @@ function showScreen(id) {
   document.getElementById(id).classList.add('active');
 }
 
-async function callApi(action, payload) {
-  const res = await fetch(GAS_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  return res.json();
+async function callApi(action, payload, retrying) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒逾時
+    const res = await fetch(GAS_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action, ...payload }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return await res.json();
+  } catch (err) {
+    if (!retrying) {
+      // 第一次失敗（常見於GAS冷啟動或現場訊號短暫不穩）自動重試一次，使用者感覺不到
+      await new Promise(r => setTimeout(r, 800));
+      return callApi(action, payload, true);
+    }
+    throw err; // 重試後仍失敗，才真正往外拋出讓畫面顯示錯誤
+  }
 }
 
 async function init() {
@@ -299,7 +312,11 @@ async function startScan() {
     hideToast();
   } catch (err) {
     hideToast();
-    alert('掃描失敗，請再試一次：' + (err && err.message || err));
+    const msg = String(err && err.message || err);
+    const friendly = msg.includes('fetch') || msg.includes('abort')
+      ? '網路訊號不穩，請確認網路後再試一次'
+      : msg;
+    alert('掃描失敗：' + friendly);
   }
 }
 
@@ -309,7 +326,7 @@ function showToast(text) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'scan-toast';
-    el.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:white;padding:10px 20px;border-radius:20px;font-size:15px;z-index:999;';
+    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:white;padding:16px 28px;border-radius:14px;font-size:17px;font-weight:700;z-index:999;box-shadow:0 4px 16px rgba(0,0,0,0.3);';
     document.body.appendChild(el);
   }
   el.textContent = text;
