@@ -457,6 +457,7 @@ async function submitForm() {
 function resetAll() {
   state.items = [];
   state.department = null;
+  renderList(); // 清空畫面上殘留的舊清單，不然要等下次掃碼才會刷新
   showScreen('screen-dept');
 }
 
