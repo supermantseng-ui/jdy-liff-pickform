@@ -161,11 +161,29 @@
     <button class="big-btn" onclick="selectDept('行政')">行政</button>
   </div>
 
+  <!-- 領料事由/工件代號 -->
+  <div id="screen-note" class="screen">
+    <div class="top-row">
+      <span class="dept-tag" id="dept-tag-note">西工</span>
+    </div>
+    <h1 style="margin-top:0;">領料事由</h1>
+    <div class="subtitle">工件代號、注意事項都可以填在這裡（選填）</div>
+    <textarea id="note-input" placeholder="例如：工件代號 A123，急件..."
+      style="width:100%; min-height:140px; font-size:22px; padding:16px; border:2px solid var(--primary); border-radius:14px; font-family:inherit; margin-bottom:8px;"></textarea>
+    <div style="text-align:center; color:var(--muted); font-size:14px; margin-bottom:24px;">
+      💡 可以直接點手機鍵盤上的麥克風圖示，用講的比較快
+    </div>
+    <button class="big-btn" onclick="goToScanFromNote()">開始掃描料號</button>
+  </div>
+
   <!-- 掃碼與清單畫面 -->
   <div id="screen-scan" class="screen">
     <div class="top-row">
       <span class="dept-tag" id="dept-tag-scan">西工</span>
-      <button class="link-btn" onclick="goToDeptScreen()">重新選擇單位</button>
+      <div>
+        <button class="link-btn" onclick="goToNoteFromScan()">修改事由</button>
+        <button class="link-btn" onclick="goToDeptScreen()">重新選擇單位</button>
+      </div>
     </div>
     <button class="big-btn scan-btn" onclick="startScan()">📷 掃描料號</button>
     <div class="status-bar" id="status-count">已掃描 0 項</div>
@@ -232,6 +250,7 @@ let state = {
   applicantAccount: null,
   applicantName: null,
   department: null,
+  note: '',
   items: [], // { code, name, unit, warehouse, qty }
 };
 
@@ -301,13 +320,25 @@ async function init() {
 
 function selectDept(dept) {
   state.department = dept;
+  document.getElementById('dept-tag-note').textContent = dept;
   document.getElementById('dept-tag-scan').textContent = dept;
   document.getElementById('dept-tag-confirm').textContent = dept;
+  document.getElementById('note-input').value = state.note || '';
+  showScreen('screen-note');
+}
+
+function goToScanFromNote() {
+  state.note = document.getElementById('note-input').value.trim();
   showScreen('screen-scan');
 }
 
 function goToDeptScreen() {
   showScreen('screen-dept');
+}
+
+function goToNoteFromScan() {
+  document.getElementById('note-input').value = state.note || '';
+  showScreen('screen-note');
 }
 
 async function startScan() {
@@ -437,6 +468,7 @@ async function submitForm() {
       department: state.department,
       applicantAccount: state.applicantAccount,
       applicantName: state.applicantName,
+      note: state.note,
       lines: state.items.map(i => ({
         code: i.code, name: i.name, unit: i.unit, warehouse: i.warehouse, qty: i.qty,
       })),
@@ -457,6 +489,7 @@ async function submitForm() {
 function resetAll() {
   state.items = [];
   state.department = null;
+  state.note = '';
   renderList(); // 清空畫面上殘留的舊清單，不然要等下次掃碼才會刷新
   showScreen('screen-dept');
 }
