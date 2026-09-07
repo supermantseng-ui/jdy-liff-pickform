@@ -185,10 +185,10 @@
         <button class="link-btn" onclick="goToDeptScreen()">重新選擇單位</button>
       </div>
     </div>
-    <button class="big-btn scan-btn" onclick="startScan()">📷 掃描料號</button>
+    <button class="big-btn scan-btn" onclick="startScan()">📷 掃描儲位＋料號</button>
     <div class="status-bar" id="status-count">已掃描 0 項</div>
     <div class="list-area" id="item-list">
-      <div class="empty-hint">掃描料號後，項目會顯示在這裡</div>
+      <div class="empty-hint">掃描儲位＋料號後，項目會顯示在這裡</div>
     </div>
     <div class="bottom-actions">
       <button class="big-btn" id="btn-confirm" onclick="goToConfirm()" disabled>確認清單，準備送出</button>
@@ -343,27 +343,48 @@ function goToNoteFromScan() {
   showScreen('screen-note');
 }
 
+// 儲位代碼格式：1個廠別數字(1-3) + 1個Zone字母(A-F) + 2位數儲位編號(01-60)，例如 1A01
+const LOCATION_PATTERN = /^[123][A-F](0[1-9]|[1-5][0-9]|60)$/;
+
 async function startScan() {
   try {
-    // scanCodeV2() 是LINE原生相機模組，理論上不會不回應，但保險起見包一層逾時，
-    // 避免萬一真的卡住時，App整個看起來像當機、使用者不知道能不能重試
-    const scanTimeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('scan-timeout')), 25000)
-    );
-    const res = await Promise.race([liff.scanCodeV2(), scanTimeout]);
-    const code = (res.value || '').trim();
+    // 先掃儲位QR
+    const locResult = await scanOnceWithTimeout_();
+    const locCode = (locResult.value || '').trim().toUpperCase();
+    if (!locCode) return;
+    if (!LOCATION_PATTERN.test(locCode)) {
+      alert('這不是儲位QR代碼（掃到：' + locCode + '）\n請先掃儲位QR，再掃料號QR');
+      return;
+    }
+
+    // 再掃料號QR
+    alert('儲位掃描成功：' + locCode + '\n請繼續掃描料號QR');
+    const codeResult = await scanOnceWithTimeout_();
+    const code = (codeResult.value || '').trim();
     if (!code) return;
+    if (LOCATION_PATTERN.test(code)) {
+      alert('這個看起來像儲位代碼，不是料號（掃到：' + code + '）\n請重新掃描本次的料號');
+      return;
+    }
+
     showToast('查詢中...');
-    await lookupAndAddItem(code);
+    await lookupAndAddItem(code, locCode);
     hideToast();
   } catch (err) {
     hideToast();
     if (err && err.message === 'scan-timeout') {
-      alert('相機沒有反應，請直接再按一次「掃描料號」重試');
+      alert('相機沒有反應，請直接再按一次「掃描儲位＋料號」重試');
       return;
     }
     alert('掃描失敗：' + friendlyError_(err));
   }
+}
+
+function scanOnceWithTimeout_() {
+  const scanTimeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('scan-timeout')), 25000)
+  );
+  return Promise.race([liff.scanCodeV2(), scanTimeout]);
 }
 
 let toastTimer = null;
@@ -383,10 +404,10 @@ function hideToast() {
   if (el) el.style.display = 'none';
 }
 
-async function lookupAndAddItem(code) {
-  const existing = state.items.find(i => i.code === code);
+async function lookupAndAddItem(code, location) {
+  const existing = state.items.find(i => i.code === code && i.location === location);
   if (existing) {
-    // 同一個料號重複掃到，數量+1，比要求重新輸入更符合現場直覺
+    // 同一個料號+同一個儲位重複掃到，數量+1，比要求重新輸入更符合現場直覺
     existing.qty = (Number(existing.qty) || 0) + 1;
     renderList();
     return;
@@ -400,7 +421,7 @@ async function lookupAndAddItem(code) {
     code: result.item.code,
     name: result.item.name,
     unit: result.item.unit,
-    warehouse: result.item.warehouse,
+    location: location,
     qty: 1,
   });
   renderList();
@@ -415,14 +436,14 @@ function renderList() {
   confirmBtn.disabled = state.items.length === 0;
 
   if (state.items.length === 0) {
-    listEl.innerHTML = '<div class="empty-hint">掃描料號後，項目會顯示在這裡</div>';
+    listEl.innerHTML = '<div class="empty-hint">掃描儲位＋料號後，項目會顯示在這裡</div>';
     return;
   }
 
   listEl.innerHTML = state.items.map((item, idx) => `
     <div class="item-card">
       <div class="item-info">
-        <div class="item-code">${item.code}　${item.warehouse || ''}</div>
+        <div class="item-code">${item.code}　儲位:${item.location || ''}</div>
         <div class="item-name">${item.name}</div>
         <div class="item-meta">單位：${item.unit || '-'}</div>
       </div>
@@ -449,7 +470,7 @@ function goToConfirm() {
   listEl.innerHTML = state.items.map(item => `
     <div class="item-card">
       <div class="item-info">
-        <div class="item-code">${item.code}　${item.warehouse || ''}</div>
+        <div class="item-code">${item.code}　儲位:${item.location || ''}</div>
         <div class="item-name">${item.name}</div>
         <div class="item-meta">單位：${item.unit || '-'}</div>
       </div>
@@ -472,7 +493,7 @@ async function submitForm() {
       applicantName: state.applicantName,
       note: state.note,
       lines: state.items.map(i => ({
-        code: i.code, name: i.name, unit: i.unit, warehouse: i.warehouse, qty: i.qty,
+        code: i.code, name: i.name, unit: i.unit, location: i.location, qty: i.qty,
       })),
     });
     if (result.ok) {
