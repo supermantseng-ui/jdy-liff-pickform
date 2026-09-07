@@ -304,7 +304,9 @@ async function init() {
     const auth = await callApi('checkAuth', { lineUserId: state.lineUserId, displayName: profile.displayName });
     if (!auth.ok) {
       document.getElementById('error-title').textContent = '尚未開通使用權限';
-      document.getElementById('error-detail').textContent = '請聯繫管理人員將您的LINE帳號加入領料掃碼名單';
+      document.getElementById('error-detail').innerHTML =
+        '請把下面這串代碼截圖傳給管理人員，加入領料掃碼名單：<br><br>' +
+        '<span style="font-weight:700; color:var(--text); word-break:break-all; user-select:all;">' + state.lineUserId + '</span>';
       showScreen('screen-error');
       return;
     }
