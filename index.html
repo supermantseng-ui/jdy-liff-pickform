@@ -358,7 +358,8 @@ async function startScan() {
     }
 
     // 再掃料號QR
-    alert('儲位掃描成功：' + locCode + '\n請繼續掃描料號QR');
+    showToast('儲位確認：' + locCode + '，請繼續掃料號');
+    await new Promise(r => setTimeout(r, 900)); // 短暫停留讓使用者看清楚，不需手動點確定
     const codeResult = await scanOnceWithTimeout_();
     const code = (codeResult.value || '').trim();
     if (!code) return;
