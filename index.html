@@ -460,6 +460,20 @@ function hideToast() {
   if (el) el.style.display = 'none';
 }
 
+function showLowStockWarning(code, name) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; display:flex; align-items:center; justify-content:center; padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:white; border-radius:16px; padding:24px; max-width:360px; text-align:center;">
+      <div style="font-size:48px; margin-bottom:8px;">⚠️</div>
+      <div style="font-size:20px; font-weight:700; color:var(--danger); margin-bottom:12px;">低於安全庫存</div>
+      <div style="font-size:16px; margin-bottom:20px;">${code}　${name}<br>請注意庫存量，必要時通知採購</div>
+      <button class="big-btn" style="margin-bottom:0;" onclick="this.parentElement.parentElement.remove()">知道了</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
 async function lookupAndAddItem(code, location) {
   const existing = state.items.find(i => i.code === code && i.location === location);
   if (existing) {
@@ -467,7 +481,7 @@ async function lookupAndAddItem(code, location) {
     existing.qty = (Number(existing.qty) || 0) + 1;
     renderList();
     if (existing.lowStock) {
-      alert('⚠️ 低於安全庫存\n' + existing.code + '　' + existing.name + '\n請注意庫存量，必要時通知採購');
+      showLowStockWarning(existing.code, existing.name);
     }
     return;
   }
@@ -486,7 +500,7 @@ async function lookupAndAddItem(code, location) {
   });
   renderList();
   if (result.item.lowStock) {
-    alert('⚠️ 低於安全庫存\n' + result.item.code + '　' + result.item.name + '\n請注意庫存量，必要時通知採購');
+    showLowStockWarning(result.item.code, result.item.name);
   }
 }
 
@@ -509,7 +523,6 @@ function renderList() {
         <div class="item-code">${item.code}　儲位:${item.location || ''}${item.lowStock ? '　<span style="color:var(--danger);font-weight:700;">⚠️低於安全庫存</span>' : ''}</div>
         <div class="item-name">${item.name}</div>
         <div class="item-meta">單位：${item.unit || '-'}</div>
-        <div class="item-meta" style="color:#999;">debug: lowStock=${item.lowStock}</div>
       </div>
       <input class="qty-input" type="number" inputmode="decimal" value="${item.qty}"
              onchange="updateQty(${idx}, this.value)">
