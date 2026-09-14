@@ -152,8 +152,21 @@
     </div>
   </div>
 
+  <!-- 主選單 -->
+  <div id="screen-menu" class="screen">
+    <h1>倉庫作業</h1>
+    <div class="subtitle">請選擇要進行的作業</div>
+    <button class="big-btn" onclick="showScreen('screen-dept')">📤 領料出庫</button>
+    <button class="big-btn gray" onclick="comingSoon('入庫作業')">📥 入庫作業</button>
+    <button class="big-btn gray" onclick="comingSoon('移倉作業')">🔄 移倉作業</button>
+    <button class="big-btn gray" onclick="comingSoon('盤點作業')">📋 盤點作業</button>
+  </div>
+
   <!-- 選擇領料單位 -->
   <div id="screen-dept" class="screen">
+    <div class="top-row">
+      <button class="link-btn" onclick="showScreen('screen-menu')">← 回主選單</button>
+    </div>
     <h1>掃碼領料</h1>
     <div class="subtitle">請先選擇本次領料單位</div>
     <button class="big-btn" onclick="selectDept('西工')">西工</button>
@@ -251,7 +264,7 @@ let state = {
   applicantName: null,
   department: null,
   note: '',
-  items: [], // { code, name, unit, warehouse, qty }
+  items: [], // { code, name, unit, location, qty }
 };
 
 function showScreen(id) {
@@ -312,12 +325,16 @@ async function init() {
     }
     state.applicantAccount = auth.account;
     state.applicantName = auth.name;
-    showScreen('screen-dept');
+    showScreen('screen-menu');
   } catch (err) {
     document.getElementById('error-title').textContent = '連線發生問題';
     document.getElementById('error-detail').textContent = friendlyError_(err);
     showScreen('screen-error');
   }
+}
+
+function comingSoon(name) {
+  alert(name + ' 即將推出，敬請期待！');
 }
 
 function selectDept(dept) {
@@ -411,6 +428,9 @@ async function lookupAndAddItem(code, location) {
     // 同一個料號+同一個儲位重複掃到，數量+1，比要求重新輸入更符合現場直覺
     existing.qty = (Number(existing.qty) || 0) + 1;
     renderList();
+    if (existing.lowStock) {
+      alert('⚠️ 低於安全庫存\n' + existing.code + '　' + existing.name + '\n請注意庫存量，必要時通知採購');
+    }
     return;
   }
   const result = await callApi('lookupItem', { code });
@@ -423,9 +443,13 @@ async function lookupAndAddItem(code, location) {
     name: result.item.name,
     unit: result.item.unit,
     location: location,
+    lowStock: !!result.item.lowStock,
     qty: 1,
   });
   renderList();
+  if (result.item.lowStock) {
+    alert('⚠️ 低於安全庫存\n' + result.item.code + '　' + result.item.name + '\n請注意庫存量，必要時通知採購');
+  }
 }
 
 function renderList() {
@@ -444,7 +468,7 @@ function renderList() {
   listEl.innerHTML = state.items.map((item, idx) => `
     <div class="item-card">
       <div class="item-info">
-        <div class="item-code">${item.code}　儲位:${item.location || ''}</div>
+        <div class="item-code">${item.code}　儲位:${item.location || ''}${item.lowStock ? '　<span style="color:var(--danger);font-weight:700;">⚠️低於安全庫存</span>' : ''}</div>
         <div class="item-name">${item.name}</div>
         <div class="item-meta">單位：${item.unit || '-'}</div>
       </div>
