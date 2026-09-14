@@ -162,7 +162,7 @@
   <!-- 主選單 -->
   <div id="screen-menu" class="screen">
     <h1>倉庫作業</h1>
-    <div class="subtitle">請選擇要進行的作業</div>
+    <div class="subtitle" id="menu-operator-name">目前作業人員：-</div>
     <button class="big-btn" onclick="showScreen('screen-dept')">📤 領料出庫</button>
     <button class="big-btn gray" onclick="comingSoon('入庫作業')">📥 入庫作業</button>
     <button class="big-btn gray" onclick="comingSoon('移倉作業')">🔄 移倉作業</button>
@@ -328,7 +328,7 @@ async function init() {
     }
     state.applicantAccount = auth.account;
     state.applicantName = auth.name;
-    showScreen('screen-menu');
+    goToMenu_();
   } catch (err) {
     document.getElementById('error-title').textContent = '連線發生問題';
     document.getElementById('error-detail').textContent = friendlyError_(err);
@@ -364,11 +364,16 @@ async function bindSelf(name, account) {
     }
     state.applicantAccount = result.account;
     state.applicantName = result.name;
-    showScreen('screen-menu');
+    goToMenu_();
   } catch (err) {
     alert('綁定失敗：' + friendlyError_(err));
     showBindScreen();
   }
+}
+
+function goToMenu_() {
+  document.getElementById('menu-operator-name').textContent = '目前作業人員：' + (state.applicantName || '-');
+  showScreen('screen-menu');
 }
 
 function comingSoon(name) {
