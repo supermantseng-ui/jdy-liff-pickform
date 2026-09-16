@@ -163,22 +163,20 @@
   <div id="screen-menu" class="screen">
     <h1>倉庫作業</h1>
     <div class="subtitle" id="menu-operator-name">目前作業人員：-</div>
-    <button class="big-btn" onclick="showScreen('screen-dept')">📤 領料出庫</button>
-    <button class="big-btn gray" onclick="comingSoon('入庫作業')">📥 入庫作業</button>
+    <button class="big-btn" onclick="enterMode('out')">📤 領料出庫</button>
+    <button class="big-btn" onclick="enterMode('in')">📥 入庫作業</button>
     <button class="big-btn gray" onclick="comingSoon('移倉作業')">🔄 移倉作業</button>
     <button class="big-btn gray" onclick="comingSoon('盤點作業')">📋 盤點作業</button>
   </div>
 
-  <!-- 選擇領料單位 -->
+  <!-- 選擇單位 -->
   <div id="screen-dept" class="screen">
     <div class="top-row">
       <button class="link-btn" onclick="showScreen('screen-menu')">← 回主選單</button>
     </div>
-    <h1>掃碼領料</h1>
-    <div class="subtitle">請先選擇本次領料單位</div>
-    <button class="big-btn" onclick="selectDept('西工')">西工</button>
-    <button class="big-btn" onclick="selectDept('業務')">業務</button>
-    <button class="big-btn" onclick="selectDept('行政')">行政</button>
+    <h1 id="dept-screen-title">掃碼領料</h1>
+    <div class="subtitle" id="dept-screen-subtitle">請先選擇本次領料單位</div>
+    <div id="dept-buttons"></div>
   </div>
 
   <!-- 領料事由/工件代號 -->
@@ -186,7 +184,7 @@
     <div class="top-row">
       <span class="dept-tag" id="dept-tag-note">西工</span>
     </div>
-    <h1 style="margin-top:0;">領料事由</h1>
+    <h1 style="margin-top:0;" id="note-screen-title">領料事由</h1>
     <div class="subtitle">工件代號、注意事項都可以填在這裡（選填）</div>
     <textarea id="note-input" placeholder="例如：工件代號 A123，急件..."
       style="width:100%; min-height:140px; font-size:22px; padding:16px; border:2px solid var(--primary); border-radius:14px; font-family:inherit; margin-bottom:8px;"></textarea>
@@ -243,7 +241,7 @@
       <div class="msg-icon">✅</div>
       <div class="msg-title">送出成功</div>
       <div class="msg-detail">單號：<span id="success-doc-no">-</span></div>
-      <button class="big-btn" onclick="resetAll()">繼續下一批領料</button>
+      <button class="big-btn" onclick="resetAll()">繼續下一批作業</button>
     </div>
   </div>
 
@@ -269,10 +267,41 @@ let state = {
   lineUserId: null,
   applicantAccount: null,
   applicantName: null,
+  mode: 'out', // 'out'=領料出庫, 'in'=入庫作業
   department: null,
   note: '',
   items: [], // { code, name, unit, location, qty }
 };
+
+// 兩種作業模式的差異設定：單位選項、畫面標題、對應的BPM單位欄位名稱、送出時呼叫的API action
+const MODE_CONFIG = {
+  out: {
+    depts: ['西工', '業務', '行政'],
+    screenTitle: '掃碼領料',
+    subtitle: '請先選擇本次領料單位',
+    noteTitle: '領料事由',
+    submitAction: 'submitPickList',
+  },
+  in: {
+    depts: ['西工', '業務', '行政', '客戶'],
+    screenTitle: '掃碼入庫',
+    subtitle: '請先選擇本次入庫單位',
+    noteTitle: '入庫事由',
+    submitAction: 'submitReceiveList',
+  },
+};
+
+function enterMode(mode) {
+  state.mode = mode;
+  const cfg = MODE_CONFIG[mode];
+  document.getElementById('dept-screen-title').textContent = cfg.screenTitle;
+  document.getElementById('dept-screen-subtitle').textContent = cfg.subtitle;
+  document.getElementById('note-screen-title').textContent = cfg.noteTitle;
+  document.getElementById('dept-buttons').innerHTML = cfg.depts.map(d =>
+    `<button class="big-btn" onclick="selectDept('${d}')">${d}</button>`
+  ).join('');
+  showScreen('screen-dept');
+}
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
@@ -395,7 +424,7 @@ function goToScanFromNote() {
 }
 
 function goToDeptScreen() {
-  showScreen('screen-dept');
+  enterMode(state.mode);
 }
 
 function goToNoteFromScan() {
@@ -569,7 +598,7 @@ function goBackToScan() {
 async function submitForm() {
   showScreen('screen-submitting');
   try {
-    const result = await callApi('submitPickList', {
+    const result = await callApi(MODE_CONFIG[state.mode].submitAction, {
       department: state.department,
       applicantAccount: state.applicantAccount,
       applicantName: state.applicantName,
