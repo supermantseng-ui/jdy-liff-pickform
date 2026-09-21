@@ -165,7 +165,7 @@
     <div class="subtitle" id="menu-operator-name">目前作業人員：-</div>
     <button class="big-btn" onclick="enterMode('out')">📤 領料出庫</button>
     <button class="big-btn" onclick="enterMode('in')">📥 入庫作業</button>
-    <button class="big-btn gray" onclick="comingSoon('移倉作業')">🔄 移倉作業</button>
+    <button class="big-btn" onclick="enterTransferMode()">🔄 移倉/借出還回</button>
     <button class="big-btn gray" onclick="comingSoon('盤點作業')">📋 盤點作業</button>
   </div>
 
@@ -177,6 +177,53 @@
     <h1 id="dept-screen-title">掃碼領料</h1>
     <div class="subtitle" id="dept-screen-subtitle">請先選擇本次領料單位</div>
     <div id="dept-buttons"></div>
+  </div>
+
+  <!-- 移倉/借出還回：選擇類別 -->
+  <div id="screen-transfer-category" class="screen">
+    <div class="top-row">
+      <button class="link-btn" onclick="showScreen('screen-menu')">← 回主選單</button>
+    </div>
+    <h1>移倉/借出還回</h1>
+    <div class="subtitle">請選擇本次類別</div>
+    <button class="big-btn" onclick="selectTransferCategory('移倉')">移倉</button>
+    <button class="big-btn" onclick="selectTransferCategory('借出')">借出</button>
+    <button class="big-btn" onclick="selectTransferCategory('還回')">還回</button>
+    <button class="big-btn secondary" onclick="selectTransferCategory('其他')">其他（請在事由說明）</button>
+  </div>
+
+  <!-- 移倉/借出還回：掃描移出/移入 + 核對清單 -->
+  <div id="screen-transfer-scan" class="screen">
+    <div class="top-row">
+      <span class="dept-tag" id="transfer-category-tag">移倉</span>
+      <div>
+        <button class="link-btn" onclick="goToNoteFromScan()">修改事由</button>
+        <button class="link-btn" onclick="showScreen('screen-menu')">回主選單</button>
+      </div>
+    </div>
+    <button class="big-btn scan-btn" style="background:var(--danger);" onclick="startTransferScan('out')">📤 掃描移出（儲位＋料號）</button>
+    <button class="big-btn scan-btn" onclick="startTransferScan('in')">📥 掃描移入（儲位＋料號）</button>
+    <div id="transfer-balance-summary"></div>
+    <div class="list-area" id="transfer-list">
+      <div class="empty-hint">掃描移出/移入後，項目會顯示在這裡</div>
+    </div>
+    <div class="bottom-actions">
+      <button class="big-btn" id="btn-transfer-confirm" onclick="goToTransferConfirm()" disabled>確認清單，準備送出</button>
+    </div>
+  </div>
+
+  <!-- 移倉/借出還回：確認畫面 -->
+  <div id="screen-transfer-confirm" class="screen">
+    <div class="top-row">
+      <span class="dept-tag" id="transfer-category-tag-confirm">移倉</span>
+    </div>
+    <h1 style="margin-top:0;">請再次確認</h1>
+    <div class="subtitle">確認以下移出/移入項目及數量都正確無誤</div>
+    <div class="list-area" id="transfer-confirm-list"></div>
+    <div class="bottom-actions">
+      <button class="big-btn" onclick="submitTransferForm()">✅ 確認無誤，送出</button>
+      <button class="big-btn secondary" onclick="showScreen('screen-transfer-scan')">返回修改</button>
+    </div>
   </div>
 
   <!-- 領料事由/工件代號 -->
@@ -267,10 +314,13 @@ let state = {
   lineUserId: null,
   applicantAccount: null,
   applicantName: null,
+  flow: 'pick', // 'pick'=領料出庫/入庫作業（走原本的dept流程）, 'transfer'=移倉/借出還回
   mode: 'out', // 'out'=領料出庫, 'in'=入庫作業
   department: null,
+  transferCategory: null, // 移倉/借出/還回/其他
   note: '',
-  items: [], // { code, name, unit, location, qty }
+  items: [], // { code, name, unit, location, qty } — 領料/入庫用
+  transferItems: [], // { direction:'out'|'in', code, name, unit, location, qty } — 移倉/借出還回用
 };
 
 // 兩種作業模式的差異設定：單位選項、畫面標題、對應的BPM單位欄位名稱、送出時呼叫的API action
@@ -292,6 +342,7 @@ const MODE_CONFIG = {
 };
 
 function enterMode(mode) {
+  state.flow = 'pick';
   state.mode = mode;
   const cfg = MODE_CONFIG[mode];
   document.getElementById('dept-screen-title').textContent = cfg.screenTitle;
@@ -301,6 +352,204 @@ function enterMode(mode) {
     `<button class="big-btn" onclick="selectDept('${d}')">${d}</button>`
   ).join('');
   showScreen('screen-dept');
+}
+
+// ==================== 移倉/借出還回 ====================
+function enterTransferMode() {
+  state.flow = 'transfer';
+  showScreen('screen-transfer-category');
+}
+
+function selectTransferCategory(cat) {
+  state.transferCategory = cat;
+  document.getElementById('transfer-category-tag').textContent = cat;
+  document.getElementById('transfer-category-tag-confirm').textContent = cat;
+  document.getElementById('dept-tag-note').textContent = cat;
+  document.getElementById('note-screen-title').textContent = cat + '事由';
+  document.getElementById('note-input').value = state.note || '';
+  showScreen('screen-note');
+}
+
+async function startTransferScan(direction) {
+  try {
+    const locResult = await scanOnceWithTimeout_();
+    const locCode = (locResult.value || '').trim().toUpperCase();
+    if (!locCode) return;
+    if (!LOCATION_PATTERN.test(locCode)) {
+      alert('這不是儲位QR代碼（掃到：' + locCode + '）\n請先掃儲位QR，再掃料號QR');
+      return;
+    }
+
+    showToast((direction === 'out' ? '移出' : '移入') + '儲位確認：' + locCode + '，請繼續掃料號');
+    await new Promise(r => setTimeout(r, 900));
+    const codeResult = await scanOnceWithTimeout_();
+    const code = (codeResult.value || '').trim();
+    if (!code) return;
+    if (LOCATION_PATTERN.test(code)) {
+      alert('這個看起來像儲位代碼，不是料號（掃到：' + code + '）\n請重新掃描本次的料號');
+      return;
+    }
+
+    showToast('查詢中...');
+    const result = await callApi('lookupItem', { code });
+    hideToast();
+    if (!result.ok) {
+      alert('查無此料號：' + code + '\n請確認QR標籤或聯繫管理人員');
+      return;
+    }
+
+    const existing = state.transferItems.find(
+      i => i.code === code && i.location === locCode && i.direction === direction
+    );
+    if (existing) {
+      existing.qty = (Number(existing.qty) || 0) + 1;
+    } else {
+      state.transferItems.push({
+        direction: direction,
+        code: result.item.code,
+        name: result.item.name,
+        unit: result.item.unit,
+        location: locCode,
+        qty: 1,
+      });
+    }
+    renderTransferList();
+
+    // 低於安全庫存的警示只在「移出」時有意義（會讓來源儲位存量更少）
+    if (direction === 'out' && result.item.lowStock) {
+      showLowStockWarning(result.item.code, result.item.name);
+    }
+  } catch (err) {
+    hideToast();
+    if (err && err.message === 'scan-timeout') {
+      alert('相機沒有反應，請直接再按一次重試');
+      return;
+    }
+    alert('掃描失敗：' + friendlyError_(err));
+  }
+}
+
+function computeTransferBalance() {
+  const byCode = {};
+  state.transferItems.forEach(item => {
+    if (!byCode[item.code]) byCode[item.code] = { name: item.name, out: 0, in: 0 };
+    byCode[item.code][item.direction] += Number(item.qty) || 0;
+  });
+  const mismatches = Object.keys(byCode)
+    .map(code => ({ code, ...byCode[code] }))
+    .filter(r => r.out !== r.in);
+  return { balanced: mismatches.length === 0 && state.transferItems.length > 0, mismatches, byCode };
+}
+
+function renderTransferList() {
+  const listEl = document.getElementById('transfer-list');
+  const summaryEl = document.getElementById('transfer-balance-summary');
+  const confirmBtn = document.getElementById('btn-transfer-confirm');
+
+  if (state.transferItems.length === 0) {
+    listEl.innerHTML = '<div class="empty-hint">掃描移出/移入後，項目會顯示在這裡</div>';
+    summaryEl.innerHTML = '';
+    confirmBtn.disabled = true;
+    return;
+  }
+
+  listEl.innerHTML = state.transferItems.map((item, idx) => `
+    <div class="item-card">
+      <div class="item-info">
+        <div class="item-code">
+          <span style="color:${item.direction === 'out' ? 'var(--danger)' : 'var(--primary)'}; font-weight:700;">
+            ${item.direction === 'out' ? '📤移出' : '📥移入'}
+          </span>
+          　${item.code}　儲位:${item.location || ''}
+        </div>
+        <div class="item-name">${item.name}</div>
+        <div class="item-meta">單位：${item.unit || '-'}</div>
+      </div>
+      <input class="qty-input" type="number" inputmode="decimal" value="${item.qty}"
+             onchange="updateTransferQty(${idx}, this.value)">
+      <button class="del-btn" onclick="removeTransferItem(${idx})">✕</button>
+    </div>
+  `).join('');
+
+  const balance = computeTransferBalance();
+  if (balance.mismatches.length === 0) {
+    summaryEl.innerHTML = '<div class="status-bar">✅ 各料號出入數量已核對一致</div>';
+    confirmBtn.disabled = false;
+  } else {
+    summaryEl.innerHTML = '<div class="status-bar" style="background:#fde8e8; color:var(--danger);">⚠️ ' +
+      balance.mismatches.map(m => `${m.code} ${m.name}：移出${m.out} / 移入${m.in}`).join('　') +
+      '　尚未核對一致，無法送出</div>';
+    confirmBtn.disabled = true;
+  }
+}
+
+function updateTransferQty(idx, val) {
+  const n = Number(val);
+  state.transferItems[idx].qty = isNaN(n) ? 0 : n;
+  renderTransferList();
+}
+
+function removeTransferItem(idx) {
+  state.transferItems.splice(idx, 1);
+  renderTransferList();
+}
+
+function goToTransferConfirm() {
+  const balance = computeTransferBalance();
+  if (!balance.balanced) {
+    alert('尚有料號的移出/移入數量不一致，請先核對清單後再送出');
+    return;
+  }
+  const listEl = document.getElementById('transfer-confirm-list');
+  listEl.innerHTML = state.transferItems.map(item => `
+    <div class="item-card">
+      <div class="item-info">
+        <div class="item-code">
+          <span style="color:${item.direction === 'out' ? 'var(--danger)' : 'var(--primary)'}; font-weight:700;">
+            ${item.direction === 'out' ? '📤移出' : '📥移入'}
+          </span>
+          　${item.code}　儲位:${item.location || ''}
+        </div>
+        <div class="item-name">${item.name}</div>
+        <div class="item-meta">單位：${item.unit || '-'}</div>
+      </div>
+      <div style="font-size:22px; font-weight:700;">x ${item.qty}</div>
+    </div>
+  `).join('');
+  showScreen('screen-transfer-confirm');
+}
+
+async function submitTransferForm() {
+  showScreen('screen-submitting');
+  try {
+    const result = await callApi('submitTransfer', {
+      category: state.transferCategory,
+      applicantAccount: state.applicantAccount,
+      applicantName: state.applicantName,
+      note: state.note,
+      items: state.transferItems.map(i => ({
+        direction: i.direction, code: i.code, name: i.name, unit: i.unit, location: i.location, qty: i.qty,
+      })),
+    });
+    if (result.ok) {
+      document.getElementById('success-doc-no').textContent = result.docNo || '(未取得單號)';
+      showScreen('screen-success');
+    } else {
+      document.getElementById('fail-detail').textContent = result.reason || '未知錯誤';
+      showScreen('screen-fail');
+    }
+  } catch (err) {
+    document.getElementById('fail-detail').textContent = friendlyError_(err);
+    showScreen('screen-fail');
+  }
+}
+
+function resetTransferAll() {
+  state.transferItems = [];
+  state.transferCategory = null;
+  state.note = '';
+  renderTransferList();
+  showScreen('screen-transfer-category');
 }
 
 function showScreen(id) {
@@ -420,7 +669,7 @@ function selectDept(dept) {
 
 function goToScanFromNote() {
   state.note = document.getElementById('note-input').value.trim();
-  showScreen('screen-scan');
+  showScreen(state.flow === 'transfer' ? 'screen-transfer-scan' : 'screen-scan');
 }
 
 function goToDeptScreen() {
@@ -621,6 +870,10 @@ async function submitForm() {
 }
 
 function resetAll() {
+  if (state.flow === 'transfer') {
+    resetTransferAll();
+    return;
+  }
   state.items = [];
   state.department = null;
   state.note = '';
