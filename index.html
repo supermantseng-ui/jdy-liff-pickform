@@ -441,7 +441,110 @@ function computeTransferBalance() {
   return { balanced: mismatches.length === 0 && state.transferItems.length > 0, mismatches, byCode };
 }
 
+// ==================== 本機草稿儲存（防止斷線/當機導致已掃資料遺失）====================
+const DRAFT_KEY = 'liff_warehouse_draft_v1';
+
+function saveDraft_() {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      flow: state.flow,
+      mode: state.mode,
+      department: state.department,
+      transferCategory: state.transferCategory,
+      note: state.note,
+      items: state.items,
+      transferItems: state.transferItems,
+      savedAt: Date.now(),
+    }));
+  } catch (e) {
+    // localStorage可能因隱私瀏覽模式或容量問題寫入失敗，忽略即可，不影響主流程
+  }
+}
+
+function clearDraft_() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+}
+
+function loadDraft_() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 登入完成後檢查有沒有上次未送出的草稿，有就跳出詢問；回傳true代表有跳出詢問（先不要跳主選單）
+function checkDraftAndPrompt_() {
+  const draft = loadDraft_();
+  if (!draft) return false;
+  const itemCount = (draft.items ? draft.items.length : 0) + (draft.transferItems ? draft.transferItems.length : 0);
+  if (!itemCount) return false;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'draft-overlay';
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; display:flex; align-items:center; justify-content:center; padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:white; border-radius:16px; padding:24px; max-width:360px; text-align:center;">
+      <div style="font-size:48px; margin-bottom:8px;">📋</div>
+      <div style="font-size:20px; font-weight:700; margin-bottom:12px;">發現未送出的清單</div>
+      <div style="font-size:16px; margin-bottom:20px;">上次有 ${itemCount} 筆項目還沒送出成功，要繼續嗎？</div>
+      <button class="big-btn" style="margin-bottom:12px;" onclick="resumeDraft_()">繼續上次的清單</button>
+      <button class="big-btn secondary" style="margin-bottom:0;" onclick="discardDraft_()">不用了，清空重新開始</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  window.__pendingDraft = draft;
+  return true;
+}
+
+function resumeDraft_() {
+  const draft = window.__pendingDraft;
+  state.flow = draft.flow || 'pick';
+  state.mode = draft.mode || 'out';
+  state.department = draft.department;
+  state.transferCategory = draft.transferCategory;
+  state.note = draft.note || '';
+  state.items = draft.items || [];
+  state.transferItems = draft.transferItems || [];
+
+  const overlay = document.getElementById('draft-overlay');
+  if (overlay) overlay.remove();
+
+  if (state.flow === 'transfer') {
+    document.getElementById('transfer-category-tag').textContent = state.transferCategory || '';
+    document.getElementById('transfer-category-tag-confirm').textContent = state.transferCategory || '';
+    renderTransferList();
+    showScreen('screen-transfer-scan');
+  } else {
+    const cfg = MODE_CONFIG[state.mode];
+    document.getElementById('dept-screen-title').textContent = cfg.screenTitle;
+    document.getElementById('dept-screen-subtitle').textContent = cfg.subtitle;
+    document.getElementById('note-screen-title').textContent = cfg.noteTitle;
+    document.getElementById('dept-buttons').innerHTML = cfg.depts.map(d =>
+      `<button class="big-btn" onclick="selectDept('${d}')">${d}</button>`
+    ).join('');
+    document.getElementById('dept-tag-scan').textContent = state.department || '';
+    renderList();
+    showScreen('screen-scan');
+  }
+}
+
+function discardDraft_() {
+  clearDraft_();
+  const overlay = document.getElementById('draft-overlay');
+  if (overlay) overlay.remove();
+  goToMenu_();
+}
+
+function proceedAfterAuth_() {
+  if (!checkDraftAndPrompt_()) {
+    goToMenu_();
+  }
+}
+
 function renderTransferList() {
+  saveDraft_();
   const listEl = document.getElementById('transfer-list');
   const summaryEl = document.getElementById('transfer-balance-summary');
   const confirmBtn = document.getElementById('btn-transfer-confirm');
@@ -532,6 +635,7 @@ async function submitTransferForm() {
       })),
     });
     if (result.ok) {
+      clearDraft_();
       document.getElementById('success-doc-no').textContent = result.docNo || '(未取得單號)';
       showScreen('screen-success');
     } else {
@@ -606,7 +710,7 @@ async function init() {
     }
     state.applicantAccount = auth.account;
     state.applicantName = auth.name;
-    goToMenu_();
+    proceedAfterAuth_();
   } catch (err) {
     document.getElementById('error-title').textContent = '連線發生問題';
     document.getElementById('error-detail').textContent = friendlyError_(err);
@@ -642,7 +746,7 @@ async function bindSelf(name, account) {
     }
     state.applicantAccount = result.account;
     state.applicantName = result.name;
-    goToMenu_();
+    proceedAfterAuth_();
   } catch (err) {
     alert('綁定失敗：' + friendlyError_(err));
     showBindScreen();
@@ -788,6 +892,7 @@ async function lookupAndAddItem(code, location) {
 }
 
 function renderList() {
+  saveDraft_();
   const listEl = document.getElementById('item-list');
   const countEl = document.getElementById('status-count');
   const confirmBtn = document.getElementById('btn-confirm');
@@ -841,7 +946,7 @@ function goToConfirm() {
 }
 
 function goBackToScan() {
-  showScreen('screen-scan');
+  showScreen(state.flow === 'transfer' ? 'screen-transfer-scan' : 'screen-scan');
 }
 
 async function submitForm() {
@@ -857,6 +962,7 @@ async function submitForm() {
       })),
     });
     if (result.ok) {
+      clearDraft_();
       document.getElementById('success-doc-no').textContent = result.docNo || '(未取得單號)';
       showScreen('screen-success');
     } else {
