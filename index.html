@@ -162,10 +162,30 @@
   </div>
 
   <!-- 首次使用綁定 -->
-  <div id="screen-bind" class="screen">
-    <h1>請選擇您的姓名</h1>
-    <div class="subtitle">第一次使用需要綁定身份，之後就不用再選了</div>
-    <div class="list-area" id="staff-list"></div>
+  <!-- 首次使用：申請 -->
+  <div id="screen-apply" class="screen">
+    <h1>申請使用</h1>
+    <div class="subtitle">第一次使用，請輸入您的姓名，送出後等主管核准</div>
+    <input id="apply-name" type="text" maxlength="20" autocomplete="off" placeholder="您的姓名"
+      style="width:100%; font-size:24px; padding:16px; border:2px solid var(--primary); border-radius:14px; font-family:inherit; margin-bottom:10px;">
+    <div style="color:var(--muted); font-size:14px; margin-bottom:24px;">
+      您的 LINE 名稱「<span id="apply-line-name">-</span>」也會一併送給主管，方便確認是不是本人。
+    </div>
+    <button class="big-btn" onclick="submitApply()">送出申請</button>
+  </div>
+
+  <!-- 已申請，等待核准 / 已被停用 -->
+  <div id="screen-pending" class="screen">
+    <div class="msg-box" style="margin-top:14vh;">
+      <div class="msg-icon">⏳</div>
+      <div class="msg-title">帳號尚未啟用</div>
+      <div class="msg-detail">
+        申請姓名：<b id="pending-name">-</b><br>
+        請通知主管核准。如果之前能用、現在突然不能用，代表權限已被停用，也請聯繫主管。
+      </div>
+      <button class="big-btn" onclick="recheckAccess()">主管已核准，重新檢查</button>
+      <button class="big-btn secondary" onclick="editApplication()">姓名打錯了，重新填寫</button>
+    </div>
   </div>
 
   <!-- 主選單 -->
@@ -340,6 +360,8 @@ const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwImI2HJ4B4mr-XoOXL
 
 let state = {
   lineUserId: null,
+  accessToken: null,
+  lineName: '',
   applicantAccount: null,
   applicantName: null,
   flow: 'pick', // 'pick'=領料出庫/入庫作業（走原本的dept流程）, 'transfer'=移倉/借出還回
@@ -702,8 +724,8 @@ function resetTransferAll() {
 }
 
 // ==================== 導覽：每個畫面都有「上一步」 ====================
-const NAV_NO_BACK = new Set(['screen-loading', 'screen-error', 'screen-bind', 'screen-menu', 'screen-submitting', 'screen-success']);
-const NAV_TRANSIENT = new Set(['screen-loading', 'screen-error', 'screen-bind', 'screen-submitting', 'screen-success', 'screen-fail']);
+const NAV_NO_BACK = new Set(['screen-loading', 'screen-error', 'screen-apply', 'screen-pending', 'screen-menu', 'screen-submitting', 'screen-success']);
+const NAV_TRANSIENT = new Set(['screen-loading', 'screen-error', 'screen-apply', 'screen-pending', 'screen-submitting', 'screen-success', 'screen-fail']);
 let navStack = [];
 
 function renderScreen_(id) {
@@ -746,12 +768,20 @@ async function callApi(action, payload, retrying) {
     const res = await fetch(GAS_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, ...payload }),
+      body: JSON.stringify({ action, token: state.accessToken, ...payload }),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    return await res.json();
+    const data = await res.json();
+    if (data && data.ok === false && data.code) {
+      // 身分驗證類的失敗（憑證逾時、尚未啟用、LINE暫時連不上）：不重試，直接把原因丟給畫面顯示
+      const e = new Error(data.reason || '身分驗證失敗');
+      e.code = data.code;
+      throw e;
+    }
+    return data;
   } catch (err) {
+    if (err && err.code) throw err;
     if (!retrying) {
       // 第一次失敗（常見於GAS冷啟動或現場訊號短暫不穩）自動重試一次，使用者感覺不到
       await new Promise(r => setTimeout(r, 800));
@@ -770,17 +800,12 @@ async function init() {
       showScreen('screen-error');
       return;
     }
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    state.accessToken = liff.getAccessToken();
     const profile = await liff.getProfile();
     state.lineUserId = profile.userId;
-
-    const auth = await callApi('checkAuth', { lineUserId: state.lineUserId });
-    if (!auth.ok) {
-      await showBindScreen();
-      return;
-    }
-    state.applicantAccount = auth.account;
-    state.applicantName = auth.name;
-    proceedAfterAuth_();
+    state.lineName = profile.displayName || '';
+    handleWhoAmI_(await callApi('whoami', {}));
   } catch (err) {
     document.getElementById('error-title').textContent = '連線發生問題';
     document.getElementById('error-detail').textContent = friendlyError_(err);
@@ -788,39 +813,64 @@ async function init() {
   }
 }
 
-async function showBindScreen() {
-  const result = await callApi('getStaffList', {});
-  if (!result.ok || !result.staff || !result.staff.length) {
-    document.getElementById('error-title').textContent = '無法載入人員名單';
-    document.getElementById('error-detail').textContent = '請聯繫管理人員確認名單設定，或您的帳號可能已經被其他LINE綁定過';
-    showScreen('screen-error');
-    return;
+// 依後端回報的狀態分流：active＝進主選單；none＝申請畫面；inactive＝等待核准畫面
+function handleWhoAmI_(me) {
+  if (me.ok && me.status === 'active') {
+    state.applicantName = me.name;
+    state.applicantAccount = state.lineUserId;
+    proceedAfterAuth_();
+  } else if (me.ok && me.status === 'inactive') {
+    document.getElementById('pending-name').textContent = me.name || '-';
+    showScreen('screen-pending');
+  } else if (me.ok && me.status === 'none') {
+    showApplyScreen_('');
+  } else {
+    throw new Error(me.reason || '無法確認使用權限');
   }
-  const listEl = document.getElementById('staff-list');
-  listEl.innerHTML = result.staff.map(s => `
-    <button class="big-btn secondary" onclick="bindSelf('${s.name}', '${s.account}')">
-      ${s.name}${s.dept ? '（' + s.dept + '）' : ''}
-    </button>
-  `).join('');
-  showScreen('screen-bind');
 }
 
-async function bindSelf(name, account) {
+function showApplyScreen_(prefill) {
+  document.getElementById('apply-line-name').textContent = state.lineName || '-';
+  document.getElementById('apply-name').value = prefill || '';
+  showScreen('screen-apply');
+}
+
+// 與後端相同的姓名規則：2~20字，中英文、數字、空格與少數符號；開頭不能是符號
+const NAME_PATTERN = /^[\u4e00-\u9fffA-Za-z0-9][\u4e00-\u9fffA-Za-z0-9 ._·()（）-]{1,19}$/;
+
+async function submitApply() {
+  const name = document.getElementById('apply-name').value.trim().replace(/\s+/g, ' ');
+  if (!NAME_PATTERN.test(name)) {
+    alert('姓名格式不正確：請輸入 2~20 個字，只能使用中英文、數字與空格');
+    return;
+  }
   showScreen('screen-loading');
   try {
-    const result = await callApi('bindUser', { lineUserId: state.lineUserId, name, account });
+    const result = await callApi('applyAccess', { name });
     if (!result.ok) {
-      alert('綁定失敗：' + (result.reason || '未知錯誤') + '\n請重新整理再試一次');
-      showBindScreen();
+      alert('申請失敗：' + (result.reason || '未知錯誤'));
+      showApplyScreen_(name);
       return;
     }
-    state.applicantAccount = result.account;
-    state.applicantName = result.name;
-    proceedAfterAuth_();
+    handleWhoAmI_(result);
   } catch (err) {
-    alert('綁定失敗：' + friendlyError_(err));
-    showBindScreen();
+    alert('申請失敗：' + friendlyError_(err));
+    showApplyScreen_(name);
   }
+}
+
+async function recheckAccess() {
+  showScreen('screen-loading');
+  try {
+    handleWhoAmI_(await callApi('whoami', {}));
+  } catch (err) {
+    alert('檢查失敗：' + friendlyError_(err));
+    showScreen('screen-pending');
+  }
+}
+
+function editApplication() {
+  showApplyScreen_(document.getElementById('pending-name').textContent.replace(/^-$/, ''));
 }
 
 function goToMenu_() {
