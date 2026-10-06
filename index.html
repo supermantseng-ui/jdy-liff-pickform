@@ -131,9 +131,18 @@
   }
   .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .link-btn { color: var(--muted); font-size: 14px; text-decoration: underline; background: none; border: none; }
+  /* 全域「上一步」列：每個畫面（主選單、載入中、送出中、成功除外）都有 */
+  #nav-bar { display: none; position: sticky; top: 0; z-index: 50; background: var(--bg); padding: 8px 12px; }
+  #nav-bar.show { display: block; }
+  #nav-back { font-size: 18px; font-weight: 700; color: var(--primary-dark); background: #fff;
+    border: 2px solid var(--primary); border-radius: 12px; padding: 10px 18px; }
+  body.has-nav .screen { min-height: calc(100vh - 62px); }
 </style>
 </head>
 <body>
+
+  <!-- 全域上一步按鈕 -->
+  <div id="nav-bar"><button id="nav-back" onclick="goBack()">← 上一步</button></div>
 
   <!-- 載入畫面 -->
   <div id="screen-loading" class="screen active">
@@ -166,14 +175,12 @@
     <button class="big-btn" onclick="enterMode('out')">📤 領料出庫</button>
     <button class="big-btn" onclick="enterMode('in')">📥 入庫作業</button>
     <button class="big-btn" onclick="enterTransferMode()">🔄 移倉/借出還回</button>
-    <button class="big-btn gray" onclick="comingSoon('盤點作業')">📋 盤點作業</button>
+    <button class="big-btn" onclick="enterStockQuery()">🔍 庫存查詢</button>
+    <button class="big-btn secondary" onclick="openStocktakePrint()">🖨️ 盤點單列印</button>
   </div>
 
   <!-- 選擇單位 -->
   <div id="screen-dept" class="screen">
-    <div class="top-row">
-      <button class="link-btn" onclick="showScreen('screen-menu')">← 回主選單</button>
-    </div>
     <h1 id="dept-screen-title">掃碼領料</h1>
     <div class="subtitle" id="dept-screen-subtitle">請先選擇本次領料單位</div>
     <div id="dept-buttons"></div>
@@ -181,9 +188,6 @@
 
   <!-- 移倉/借出還回：選擇類別 -->
   <div id="screen-transfer-category" class="screen">
-    <div class="top-row">
-      <button class="link-btn" onclick="showScreen('screen-menu')">← 回主選單</button>
-    </div>
     <h1>移倉/借出還回</h1>
     <div class="subtitle">請選擇本次類別</div>
     <button class="big-btn" onclick="selectTransferCategory('移倉')">移倉</button>
@@ -224,6 +228,28 @@
       <button class="big-btn" onclick="submitTransferForm()">✅ 確認無誤，送出</button>
       <button class="big-btn secondary" onclick="showScreen('screen-transfer-scan')">返回修改</button>
     </div>
+  </div>
+
+  <!-- 庫存查詢：選擇查詢方式 -->
+  <div id="screen-stock-menu" class="screen">
+    <h1>庫存查詢</h1>
+    <div class="subtitle">請選擇查詢方式</div>
+    <button class="big-btn" onclick="startStockQuery('item')">依料號查詢</button>
+    <button class="big-btn" onclick="startStockQuery('location')">依儲位查詢</button>
+  </div>
+
+  <!-- 庫存查詢：掃描/輸入 + 結果 -->
+  <div id="screen-stock-query" class="screen">
+    <h1 id="stock-query-title">依料號查詢</h1>
+    <button class="big-btn scan-btn" id="stock-scan-btn" onclick="scanForStockQuery()">📷 掃描料號</button>
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      <input id="stock-input" type="text" autocapitalize="characters" autocomplete="off"
+        placeholder="或直接輸入料號" onkeydown="if(event.key==='Enter') runStockQuery(this.value)"
+        style="flex:1; min-width:0; font-size:20px; padding:14px; border:2px solid var(--primary); border-radius:12px;">
+      <button class="big-btn" style="width:auto; margin:0; padding:14px 22px; font-size:20px;"
+        onclick="runStockQuery(document.getElementById('stock-input').value)">查詢</button>
+    </div>
+    <div class="list-area" id="stock-result"></div>
   </div>
 
   <!-- 領料事由/工件代號 -->
@@ -288,7 +314,9 @@
       <div class="msg-icon">✅</div>
       <div class="msg-title">送出成功</div>
       <div class="msg-detail">單號：<span id="success-doc-no">-</span></div>
+      <div class="msg-detail" id="success-warn" style="color:var(--danger); display:none;"></div>
       <button class="big-btn" onclick="resetAll()">繼續下一批作業</button>
+      <button class="big-btn secondary" onclick="finishToMenu_()">回主選單</button>
     </div>
   </div>
 
@@ -319,11 +347,17 @@ let state = {
   department: null,
   transferCategory: null, // 移倉/借出/還回/其他
   note: '',
-  items: [], // { code, name, unit, location, qty } — 領料/入庫用
+  _items: { out: [], in: [] }, // 領料出庫、入庫作業各自一份未送出清單
   transferItems: [], // { direction:'out'|'in', code, name, unit, location, qty } — 移倉/借出還回用
 };
+// state.items 永遠指向「目前作業模式」那一份清單（元素格式：{ code, name, unit, location, qty }）
+Object.defineProperty(state, 'items', {
+  enumerable: true,
+  get() { return this._items[this.mode]; },
+  set(v) { this._items[this.mode] = v; },
+});
 
-// 兩種作業模式的差異設定：單位選項、畫面標題、對應的BPM單位欄位名稱、送出時呼叫的API action
+// 兩種作業模式的差異設定：單位選項、畫面標題、送出時呼叫的API action
 const MODE_CONFIG = {
   out: {
     depts: ['西工', '業務', '行政'],
@@ -342,6 +376,7 @@ const MODE_CONFIG = {
 };
 
 function enterMode(mode) {
+  if (state.flow !== 'pick' || state.mode !== mode) { state.note = ''; state.department = null; }
   state.flow = 'pick';
   state.mode = mode;
   const cfg = MODE_CONFIG[mode];
@@ -356,6 +391,7 @@ function enterMode(mode) {
 
 // ==================== 移倉/借出還回 ====================
 function enterTransferMode() {
+  if (state.flow !== 'transfer') state.note = '';
   state.flow = 'transfer';
   showScreen('screen-transfer-category');
 }
@@ -511,7 +547,13 @@ function resumeDraft_() {
   const overlay = document.getElementById('draft-overlay');
   if (overlay) overlay.remove();
 
+  document.getElementById('menu-operator-name').textContent = '目前作業人員：' + (state.applicantName || '-');
+  document.getElementById('note-input').value = state.note || '';
+  navStack = ['screen-menu', state.flow === 'transfer' ? 'screen-transfer-category' : 'screen-dept', 'screen-note'];
+
   if (state.flow === 'transfer') {
+    document.getElementById('dept-tag-note').textContent = state.transferCategory || '';
+    document.getElementById('note-screen-title').textContent = (state.transferCategory || '') + '事由';
     document.getElementById('transfer-category-tag').textContent = state.transferCategory || '';
     document.getElementById('transfer-category-tag-confirm').textContent = state.transferCategory || '';
     renderTransferList();
@@ -524,7 +566,9 @@ function resumeDraft_() {
     document.getElementById('dept-buttons').innerHTML = cfg.depts.map(d =>
       `<button class="big-btn" onclick="selectDept('${d}')">${d}</button>`
     ).join('');
+    document.getElementById('dept-tag-note').textContent = state.department || '';
     document.getElementById('dept-tag-scan').textContent = state.department || '';
+    document.getElementById('dept-tag-confirm').textContent = state.department || '';
     renderList();
     showScreen('screen-scan');
   }
@@ -538,9 +582,9 @@ function discardDraft_() {
 }
 
 function proceedAfterAuth_() {
-  if (!checkDraftAndPrompt_()) {
-    goToMenu_();
-  }
+  if (checkDraftAndPrompt_()) return; // 有未送出的草稿時，先讓使用者決定要不要繼續
+  goToMenu_();
+  openDeepLink_(getDeepLinkPage_()); // 手機桌面捷徑帶了 ?page=xxx 就直接進對應功能，上一步會退回主選單
 }
 
 function renderTransferList() {
@@ -637,6 +681,7 @@ async function submitTransferForm() {
     if (result.ok) {
       clearDraft_();
       document.getElementById('success-doc-no').textContent = result.docNo || '(未取得單號)';
+      showSuccessWarnings_(result.warnings);
       showScreen('screen-success');
     } else {
       document.getElementById('fail-detail').textContent = result.reason || '未知錯誤';
@@ -656,9 +701,34 @@ function resetTransferAll() {
   showScreen('screen-transfer-category');
 }
 
-function showScreen(id) {
+// ==================== 導覽：每個畫面都有「上一步」 ====================
+const NAV_NO_BACK = new Set(['screen-loading', 'screen-error', 'screen-bind', 'screen-menu', 'screen-submitting', 'screen-success']);
+const NAV_TRANSIENT = new Set(['screen-loading', 'screen-error', 'screen-bind', 'screen-submitting', 'screen-success', 'screen-fail']);
+let navStack = [];
+
+function renderScreen_(id) {
   document.querySelectorAll('.screen').forEach(el => el.classList.remove('active'));
   document.getElementById(id).classList.add('active');
+  const showBack = !NAV_NO_BACK.has(id);
+  document.getElementById('nav-bar').classList.toggle('show', showBack);
+  document.body.classList.toggle('has-nav', showBack);
+  window.scrollTo(0, 0);
+}
+
+function showScreen(id) {
+  renderScreen_(id);
+  if (id === 'screen-menu') {
+    navStack = ['screen-menu'];
+  } else if (!NAV_TRANSIENT.has(id)) {
+    const idx = navStack.lastIndexOf(id);
+    if (idx >= 0) navStack = navStack.slice(0, idx + 1); // 回到先前走過的畫面＝退回那一層
+    else navStack.push(id);
+  }
+}
+
+function goBack() {
+  if (navStack.length > 1) navStack.pop();
+  renderScreen_(navStack[navStack.length - 1] || 'screen-menu');
 }
 
 function friendlyError_(err) {
@@ -964,6 +1034,7 @@ async function submitForm() {
     if (result.ok) {
       clearDraft_();
       document.getElementById('success-doc-no').textContent = result.docNo || '(未取得單號)';
+      showSuccessWarnings_(result.warnings);
       showScreen('screen-success');
     } else {
       document.getElementById('fail-detail').textContent = result.reason || '未知錯誤';
@@ -985,6 +1056,192 @@ function resetAll() {
   state.note = '';
   renderList(); // 清空畫面上殘留的舊清單，不然要等下次掃碼才會刷新
   showScreen('screen-dept');
+}
+
+// ==================== 盤點單列印 ====================
+// ⚠️ 這個網址是從規格說明截圖裡「看」出來的（英文大寫 I 與小寫 l 字形幾乎一樣），
+//    請先點一次「🖨️ 盤點單列印」確認能開啟；若顯示找不到檔案，請把網址以文字貼給我更正。
+const STOCKTAKE_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1F-I6eTH3cnQ3i2_CVl7NTF3GCFIh9rOy6MADp8o4k1c/edit?gid=1774830594#gid=1774830594';
+
+function openStocktakePrint() {
+  try {
+    liff.openWindow({ url: STOCKTAKE_SHEET_URL, external: true });
+  } catch (e) {
+    window.open(STOCKTAKE_SHEET_URL, '_blank');
+  }
+}
+
+// ==================== 手機桌面捷徑（deep link） ====================
+// 捷徑網址格式：https://liff.line.me/{LIFF_ID}?page=out|in|transfer|stock|stock-item|stock-loc|print
+function getDeepLinkPage_() {
+  try {
+    const q = new URLSearchParams(location.search);
+    let page = q.get('page');
+    if (!page) {
+      const st = q.get('liff.state'); // LIFF 有時會把原始query包在 liff.state 裡
+      if (st) {
+        const inner = decodeURIComponent(st);
+        const i = inner.indexOf('?');
+        if (i >= 0) page = new URLSearchParams(inner.slice(i)).get('page');
+      }
+    }
+    return page || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function openDeepLink_(page) {
+  switch (page) {
+    case 'out': enterMode('out'); break;
+    case 'in': enterMode('in'); break;
+    case 'transfer': enterTransferMode(); break;
+    case 'stock': enterStockQuery(); break;
+    case 'stock-item': enterStockQuery(); startStockQuery('item'); break;
+    case 'stock-loc': enterStockQuery(); startStockQuery('location'); break;
+    case 'print': openStocktakePrint(); break;
+    default: break;
+  }
+}
+
+// ==================== 送出成功但有提醒（例如工作表少了某個欄位）====================
+function showSuccessWarnings_(warnings) {
+  const el = document.getElementById('success-warn');
+  const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  el.textContent = list.length ? '⚠️ 已寫入，但請通知管理人員：' + list.join('；') : '';
+  el.style.display = list.length ? 'block' : 'none';
+}
+
+// ==================== 送出成功後回主選單 ====================
+function finishToMenu_() {
+  state.items = [];
+  state.transferItems = [];
+  state.department = null;
+  state.transferCategory = null;
+  state.note = '';
+  renderList();
+  renderTransferList();
+  goToMenu_();
+}
+
+// ==================== 庫存查詢 ====================
+let stockQueryMode = 'item';
+
+function esc_(s) {
+  return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function fmtQty_(n) {
+  return String(Math.round((Number(n) || 0) * 1000) / 1000);
+}
+
+function enterStockQuery() {
+  showScreen('screen-stock-menu');
+}
+
+function startStockQuery(mode) {
+  stockQueryMode = mode;
+  document.getElementById('stock-query-title').textContent = mode === 'item' ? '依料號查詢' : '依儲位查詢';
+  document.getElementById('stock-scan-btn').textContent = mode === 'item' ? '📷 掃描料號' : '📷 掃描儲位';
+  document.getElementById('stock-input').placeholder = mode === 'item' ? '或直接輸入料號' : '或直接輸入儲位（例如 1A01）';
+  document.getElementById('stock-input').value = '';
+  document.getElementById('stock-result').innerHTML = '';
+  showScreen('screen-stock-query');
+}
+
+async function scanForStockQuery() {
+  try {
+    const res = await scanOnceWithTimeout_();
+    const v = (res.value || '').trim();
+    if (!v) return;
+    document.getElementById('stock-input').value = v;
+    await runStockQuery(v);
+  } catch (err) {
+    if (err && err.message === 'scan-timeout') {
+      alert('相機沒有反應，請直接再按一次重試');
+      return;
+    }
+    alert('掃描失敗：' + friendlyError_(err));
+  }
+}
+
+async function runStockQuery(raw) {
+  const v = String(raw || '').trim();
+  const resEl = document.getElementById('stock-result');
+  if (!v) {
+    resEl.innerHTML = '<div class="empty-hint">請先掃描或輸入代碼</div>';
+    return;
+  }
+  const looksLikeLocation = LOCATION_PATTERN.test(v.toUpperCase());
+  if (stockQueryMode === 'item' && looksLikeLocation) {
+    alert('這看起來是儲位代碼，不是料號。\n要查儲位請按「上一步」改選「依儲位查詢」');
+    return;
+  }
+  if (stockQueryMode === 'location' && !looksLikeLocation) {
+    alert('這不是儲位代碼格式（例如 1A01）。\n要查料號請按「上一步」改選「依料號查詢」');
+    return;
+  }
+  showToast('查詢中...');
+  try {
+    const result = stockQueryMode === 'item'
+      ? await callApi('queryStockByItem', { code: v })
+      : await callApi('queryStockByLocation', { location: v });
+    hideToast();
+    if (!result.ok) {
+      resEl.innerHTML = '<div class="empty-hint">' + esc_(result.reason || '查詢失敗') + '</div>';
+      return;
+    }
+    resEl.innerHTML = stockQueryMode === 'item' ? renderItemStock_(result) : renderLocationStock_(result);
+  } catch (err) {
+    hideToast();
+    alert('查詢失敗：' + friendlyError_(err));
+  }
+}
+
+function lowBadge_() {
+  return '<span style="color:var(--danger); font-weight:700;">⚠️低於安全庫存</span>';
+}
+
+function renderItemStock_(r) {
+  const locs = r.locations.length
+    ? r.locations.map(l => `
+        <div class="item-card">
+          <div class="item-info">
+            <div class="item-name" style="margin:0;">${esc_(l.location)}</div>
+          </div>
+          <div style="font-size:24px; font-weight:700;">${fmtQty_(l.qty)}</div>
+        </div>`).join('')
+    : '<div class="empty-hint">沒有儲位紀錄</div>';
+  return `
+    <div class="item-card" style="display:block;">
+      <div class="item-code">${esc_(r.item.code)}${r.item.productCategory ? '　' + esc_(r.item.productCategory) : ''}</div>
+      <div class="item-name">${esc_(r.item.name)}</div>
+      <div style="font-size:36px; font-weight:700; margin:8px 0;">${fmtQty_(r.total)}
+        <span style="font-size:18px; font-weight:400;">${esc_(r.item.unit || '')}</span></div>
+      <div class="item-meta">安全庫存設定：${r.safetyStock === null ? '未設定' : fmtQty_(r.safetyStock)}</div>
+      ${r.lowStock ? '<div style="margin-top:6px;">' + lowBadge_() + '</div>' : ''}
+    </div>
+    <div class="subtitle" style="margin:12px 0 8px;">儲位分布</div>
+    ${locs}`;
+}
+
+function renderLocationStock_(r) {
+  const items = r.items.length
+    ? r.items.map(i => `
+        <div class="item-card">
+          <div class="item-info">
+            <div class="item-code">${esc_(i.code)}${i.lowStock ? '　' + lowBadge_() : ''}</div>
+            <div class="item-name">${esc_(i.name)}</div>
+            <div class="item-meta">料號總庫存：${fmtQty_(i.total)}　安全庫存：${i.safetyStock === null ? '未設定' : fmtQty_(i.safetyStock)}</div>
+          </div>
+          <div style="font-size:24px; font-weight:700; text-align:right;">${fmtQty_(i.qty)}
+            <div style="font-size:14px; font-weight:400;">${esc_(i.unit || '')}</div></div>
+        </div>`).join('')
+    : '<div class="empty-hint">這個儲位目前沒有庫存紀錄</div>';
+  return `
+    <div class="status-bar">儲位 ${esc_(r.location)}：共 ${r.items.length} 種料號</div>
+    ${items}`;
 }
 
 init();
