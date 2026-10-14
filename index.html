@@ -137,6 +137,15 @@
   #nav-back { font-size: 18px; font-weight: 700; color: var(--primary-dark); background: #fff;
     border: 2px solid var(--primary); border-radius: 12px; padding: 10px 18px; }
   body.has-nav .screen { min-height: calc(100vh - 62px); }
+  /* 庫存查詢：打字時的即時下拉建議 */
+  .suggest-box { border: 2px solid var(--primary); border-radius: 12px; background: #fff; max-height: 320px;
+    overflow-y: auto; margin: -6px 0 14px; }
+  .suggest-item { padding: 12px 14px; border-bottom: 1px solid #eef0ef; font-size: 17px; cursor: pointer; word-break: break-all; }
+  .suggest-item:last-child { border-bottom: none; }
+  .suggest-item:active { background: #e8f5ec; }
+  .suggest-item b { font-weight: 700; }
+  .suggest-item .su { color: var(--muted); font-size: 14px; margin-left: 6px; }
+  .suggest-hint { padding: 12px 14px; color: var(--muted); font-size: 15px; }
 </style>
 </head>
 <body>
@@ -257,19 +266,22 @@
     <button class="big-btn" onclick="startStockQuery('item')">依料號查詢</button>
     <button class="big-btn" onclick="startStockQuery('location')">依儲位查詢</button>
     <button class="big-btn" onclick="startStockQuery('name')">依品名規格查詢</button>
+    <button class="big-btn secondary" onclick="startStockQuery('low')">⚠️ 低於安全庫存清單</button>
   </div>
 
   <!-- 庫存查詢：掃描/輸入 + 結果 -->
   <div id="screen-stock-query" class="screen">
     <h1 id="stock-query-title">依料號查詢</h1>
     <button class="big-btn scan-btn" id="stock-scan-btn" onclick="scanForStockQuery()">📷 掃描料號</button>
-    <div style="display:flex; gap:8px; margin-bottom:16px;">
+    <div id="stock-input-row" style="display:flex; gap:8px; margin-bottom:16px;">
       <input id="stock-input" type="text" autocapitalize="characters" autocomplete="off"
-        placeholder="或直接輸入料號" onkeydown="if(event.key==='Enter') runStockQuery(this.value)"
+        placeholder="或直接輸入料號" oninput="onStockInput_(this.value)" onkeydown="if(event.key==='Enter') runStockQuery(this.value)"
         style="flex:1; min-width:0; font-size:20px; padding:14px; border:2px solid var(--primary); border-radius:12px;">
       <button class="big-btn" style="width:auto; margin:0; padding:14px 22px; font-size:20px;"
         onclick="runStockQuery(document.getElementById('stock-input').value)">查詢</button>
     </div>
+    <div id="stock-suggest" class="suggest-box" style="display:none;"></div>
+    <button class="big-btn secondary" id="stock-refresh-btn" style="display:none;" onclick="runLowStock_()">🔄 重新整理</button>
     <div class="list-area" id="stock-result"></div>
   </div>
 
@@ -797,7 +809,11 @@ async function init() {
     await liff.init({ liffId: LIFF_ID });
     if (!liff.isInClient()) {
       document.getElementById('error-title').textContent = '請用LINE開啟此頁面';
-      document.getElementById('error-detail').textContent = '這個功能需要在LINE App內使用才能掃描';
+      // 不是從 LINE 裡開（例如 iPhone 桌面捷徑先開到 Safari）：給一個「用 LINE 開啟」按鈕，
+      // 手動點擊連結時，手機會把 liff.line.me 交給 LINE App 開啟；捷徑參數 ?page= 也一併帶著
+      document.getElementById('error-detail').innerHTML =
+        '這個功能需要在 LINE App 內使用才能掃描。<br><br>' +
+        '<a class="big-btn" style="text-decoration:none; margin-bottom:0;" href="' + lineOpenUrl_() + '">用 LINE 開啟</a>';
       showScreen('screen-error');
       return;
     }
@@ -812,6 +828,12 @@ async function init() {
     document.getElementById('error-detail').textContent = friendlyError_(err);
     showScreen('screen-error');
   }
+}
+
+// 「用 LINE 開啟」的網址：官方支援的 LIFF 網址格式，若原本有捷徑參數就保留
+function lineOpenUrl_() {
+  const page = getDeepLinkPage_();
+  return 'https://liff.line.me/' + LIFF_ID + (page ? '?page=' + encodeURIComponent(page) : '');
 }
 
 // 依後端回報的狀態分流：active＝進主選單；none＝申請畫面；inactive＝等待核准畫面
@@ -1151,6 +1173,7 @@ function openDeepLink_(page) {
     case 'stock-item': enterStockQuery(); startStockQuery('item'); break;
     case 'stock-loc': enterStockQuery(); startStockQuery('location'); break;
     case 'stock-name': enterStockQuery(); startStockQuery('name'); break;
+    case 'stock-low': enterStockQuery(); startStockQuery('low'); break;
     case 'print': openStocktakePrint(); break;
     default: break;
   }
@@ -1193,11 +1216,13 @@ function enterStockQuery() {
 }
 
 const STOCK_MODE_TEXT = {
-  item: { title: '依料號查詢', scan: '📷 掃描料號', placeholder: '或直接輸入料號' },
-  location: { title: '依儲位查詢', scan: '📷 掃描儲位', placeholder: '或直接輸入儲位（例如 1A01）' },
+  item: { title: '依料號查詢', scan: '📷 掃描料號', placeholder: '輸入料號或品名關鍵字，下方會列出可選的項目' },
+  location: { title: '依儲位查詢', scan: '📷 掃描儲位', placeholder: '輸入儲位，例如 1A01，下方會列出可選的儲位' },
   name: { title: '依品名規格查詢', scan: '', placeholder: '輸入品名或規格關鍵字，例如 Pin 50*70' },
+  low: { title: '低於安全庫存清單', scan: '', placeholder: '' },
 };
 let lastNameResults = null;
+let lastLowResults = null;
 
 function startStockQuery(mode) {
   stockQueryMode = mode;
@@ -1206,13 +1231,103 @@ function startStockQuery(mode) {
   const input = document.getElementById('stock-input');
   document.getElementById('stock-query-title').textContent = t.title;
   scanBtn.textContent = t.scan;
-  scanBtn.style.display = mode === 'name' ? 'none' : ''; // 品名規格沒有QR，只能輸入關鍵字
+  scanBtn.style.display = (mode === 'name' || mode === 'low') ? 'none' : ''; // 品名規格沒有QR，只能輸入關鍵字
+  document.getElementById('stock-input-row').style.display = mode === 'low' ? 'none' : 'flex';
+  document.getElementById('stock-refresh-btn').style.display = mode === 'low' ? '' : 'none';
   input.placeholder = t.placeholder;
   input.setAttribute('autocapitalize', mode === 'name' ? 'off' : 'characters');
   input.value = '';
   lastNameResults = null;
+  lastLowResults = null;
+  hideSuggest_();
   document.getElementById('stock-result').innerHTML = '';
   showScreen('screen-stock-query');
+  if (mode === 'low') runLowStock_();
+  else ensureSearchData_();
+}
+
+// ==================== 打字時的即時下拉建議 ====================
+// 進入查詢畫面時，一次把料號清單與儲位清單載到手機；之後每打一個字都在手機上直接過濾，不用等後端。
+const MAX_SUGGEST = 20;
+let searchData = null, searchDataAt = 0, searchLoading = false, currentSuggestions = [];
+
+function norm_(s) {
+  return String(s === undefined || s === null ? '' : s).normalize('NFKC').toLowerCase();
+}
+
+function prepareSearchData_(r) {
+  return {
+    items: (r.items || []).map(x => ({ c: x.c, n: x.n || '', u: x.u || '', ck: norm_(x.c), key: norm_(x.c + ' ' + (x.n || '')), nkey: norm_(x.n) })),
+    locations: (r.locations || []).map(x => ({ c: x.c, d: x.d || '', ck: norm_(x.c), key: norm_(x.c + ' ' + (x.d || '')), nkey: norm_(x.d) })),
+  };
+}
+
+async function ensureSearchData_() {
+  if (searchData && Date.now() - searchDataAt < 10 * 60 * 1000) return; // 10分鐘內不重複載入
+  if (searchLoading) return;
+  searchLoading = true;
+  try {
+    const r = await callApi('listSearchData', {});
+    if (r && r.ok) { searchData = prepareSearchData_(r); searchDataAt = Date.now(); }
+  } catch (e) {
+    // 載入失敗就沒有下拉建議，仍然可以輸入完整代碼後按「查詢」
+  } finally {
+    searchLoading = false;
+  }
+  onStockInput_(document.getElementById('stock-input').value);
+}
+
+function filterSuggestions_(mode, text) {
+  const tokens = norm_(text).split(/\s+/).filter(Boolean);
+  if (!tokens.length || !searchData) return [];
+  const pool = mode === 'location' ? searchData.locations : searchData.items;
+  const field = mode === 'name' ? 'nkey' : 'key';
+  const first = tokens[0];
+  return pool
+    .filter(x => tokens.every(t => x[field].indexOf(t) >= 0))
+    .sort((a, b) => ((b.ck.indexOf(first) === 0) - (a.ck.indexOf(first) === 0)) || (a.c < b.c ? -1 : 1)); // 代碼開頭相符的排前面
+}
+
+function hideSuggest_() {
+  const box = document.getElementById('stock-suggest');
+  box.style.display = 'none';
+  box.innerHTML = '';
+  currentSuggestions = [];
+}
+
+function onStockInput_(value) {
+  if (stockQueryMode === 'low') return;
+  const box = document.getElementById('stock-suggest');
+  const text = String(value || '').trim();
+  if (!text) { hideSuggest_(); return; }
+  currentSuggestions = [];
+  box.style.display = 'block';
+  if (!searchData) {
+    box.innerHTML = '<div class="suggest-hint">' + (searchLoading ? '載入清單中…' : '清單暫時載入失敗，仍可輸入完整代碼後按「查詢」') + '</div>';
+    return;
+  }
+  const hits = filterSuggestions_(stockQueryMode, text);
+  if (!hits.length) {
+    box.innerHTML = '<div class="suggest-hint">找不到符合的項目</div>';
+    return;
+  }
+  currentSuggestions = hits.slice(0, MAX_SUGGEST);
+  box.innerHTML = currentSuggestions.map((x, i) => stockQueryMode === 'location'
+    ? `<div class="suggest-item" onclick="pickSuggestion_(${i})"><b>${esc_(x.c)}</b>${x.d ? '<span class="su">' + esc_(x.d) + '</span>' : ''}</div>`
+    : `<div class="suggest-item" onclick="pickSuggestion_(${i})"><b>${esc_(x.c)}</b>　${esc_(x.n)}${x.u ? '<span class="su">' + esc_(x.u) + '</span>' : ''}</div>`
+  ).join('') + (hits.length > MAX_SUGGEST ? '<div class="suggest-hint">還有 ' + (hits.length - MAX_SUGGEST) + ' 筆，請再多輸入幾個字縮小範圍</div>' : '');
+}
+
+async function pickSuggestion_(i) {
+  const x = currentSuggestions[i];
+  if (!x) return;
+  hideSuggest_();
+  document.getElementById('stock-input').value = x.c;
+  if (stockQueryMode === 'name') {
+    await showItemDetail_(x.c, lastNameResults ? 'backToNameResults_' : null, '← 回到搜尋結果');
+  } else {
+    await runStockQuery(x.c);
+  }
 }
 
 async function scanForStockQuery() {
@@ -1232,6 +1347,7 @@ async function scanForStockQuery() {
 }
 
 async function runStockQuery(raw) {
+  hideSuggest_();
   const v = String(raw || '').trim();
   const resEl = document.getElementById('stock-result');
   if (!v) {
@@ -1309,19 +1425,18 @@ function renderNameResults_(r) {
   return head + cards;
 }
 
-async function openItemFromName_(idx) {
-  const hit = lastNameResults && lastNameResults.items[idx];
-  if (!hit) return;
+// 顯示單一料號的總庫存與各儲位數量；backFn 有給時，上方多一個「回到清單」按鈕
+async function showItemDetail_(code, backFn, backLabel) {
   const resEl = document.getElementById('stock-result');
   showToast('查詢中...');
   try {
-    const result = await callApi('queryStockByItem', { code: hit.code });
+    const result = await callApi('queryStockByItem', { code: code });
     hideToast();
     if (!result.ok) {
       alert(result.reason || '查詢失敗');
       return;
     }
-    resEl.innerHTML = '<button class="big-btn secondary" onclick="backToNameResults_()">← 回到搜尋結果</button>' + renderItemStock_(result);
+    resEl.innerHTML = (backFn ? '<button class="big-btn secondary" onclick="' + backFn + '()">' + backLabel + '</button>' : '') + renderItemStock_(result);
     window.scrollTo(0, 0);
   } catch (err) {
     hideToast();
@@ -1329,8 +1444,65 @@ async function openItemFromName_(idx) {
   }
 }
 
+async function openItemFromName_(idx) {
+  const hit = lastNameResults && lastNameResults.items[idx];
+  if (!hit) return;
+  await showItemDetail_(hit.code, 'backToNameResults_', '← 回到搜尋結果');
+}
+
 function backToNameResults_() {
   if (lastNameResults) document.getElementById('stock-result').innerHTML = renderNameResults_(lastNameResults);
+}
+
+// ==================== 低於安全庫存清單 ====================
+async function runLowStock_() {
+  const resEl = document.getElementById('stock-result');
+  showToast('查詢中...');
+  try {
+    const result = await callApi('queryLowStock', {});
+    hideToast();
+    if (!result.ok) {
+      resEl.innerHTML = '<div class="empty-hint">' + esc_(result.reason || '查詢失敗') + '</div>';
+      return;
+    }
+    lastLowResults = result;
+    resEl.innerHTML = renderLowResults_(result);
+  } catch (err) {
+    hideToast();
+    alert('查詢失敗：' + friendlyError_(err));
+  }
+}
+
+function renderLowResults_(r) {
+  if (!r.checked) {
+    return '<div class="empty-hint">還沒有任何料號設定安全庫存。請管理人員先在「產品編號」分頁填寫「安全庫存設定」。</div>';
+  }
+  if (!r.items.length) {
+    return '<div class="status-bar">✅ 已設定安全庫存的 ' + r.checked + ' 項，目前都沒有低於安全庫存</div>';
+  }
+  const head = '<div class="status-bar" style="background:#fde8e8; color:var(--danger);">⚠️ ' + r.total + ' 項低於安全庫存（已設定安全庫存共 ' + r.checked + ' 項）' +
+    (r.truncated ? '，只顯示缺口最大的前 ' + r.items.length + ' 項' : '，點選可看各儲位數量') + '</div>';
+  const cards = r.items.map((i, idx) => `
+    <div class="item-card" style="cursor:pointer;" onclick="openItemFromLow_(${idx})">
+      <div class="item-info">
+        <div class="item-code">${esc_(i.code)}</div>
+        <div class="item-name">${esc_(i.name)}</div>
+        <div class="item-meta">安全庫存 ${fmtQty_(i.safetyStock)}　缺 ${fmtQty_(i.shortage)}</div>
+      </div>
+      <div style="font-size:24px; font-weight:700; text-align:right; color:var(--danger);">${fmtQty_(i.total)}
+        <div style="font-size:14px; font-weight:400; color:var(--text);">${esc_(i.unit || '')}</div></div>
+    </div>`).join('');
+  return head + cards;
+}
+
+async function openItemFromLow_(idx) {
+  const hit = lastLowResults && lastLowResults.items[idx];
+  if (!hit) return;
+  await showItemDetail_(hit.code, 'backToLowResults_', '← 回到清單');
+}
+
+function backToLowResults_() {
+  if (lastLowResults) document.getElementById('stock-result').innerHTML = renderLowResults_(lastLowResults);
 }
 
 function lowBadge_() {
